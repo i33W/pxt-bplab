@@ -1,7 +1,7 @@
 /**
 * BP Lab Extensions
 */
-//% weight=1 color=#0fbc11 icon="\uf0ad"
+//% weight=1 color=#0066CB icon="\uf0ad"
 namespace BPLAB {
 
     // 그룹 1: LCD 관련
@@ -471,5 +471,233 @@ namespace BPLAB {
         tm.brightness = intensity;
         tm.init();
         return tm;
+    }
+
+    // 그룹 3: Ultrasonic 관련
+    // -----------------------------------------------------------------------------
+    enum PingUnit {
+        //% block="μs"
+        MicroSeconds,
+        //% block="cm"
+        Centimeters,
+        //% block="inches"
+        Inches
+    }
+
+    /**
+     * Send a ping and get the echo time (in microseconds) as a result
+     * @param trig tigger pin
+     * @param echo echo pin
+     * @param unit desired conversion unit
+     * @param maxCmDistance maximum distance in centimeters (default is 500)
+     */
+    //% group="Ultrasonic"
+    //% color=#2c3e50
+    //% blockId=sonar_ping block="ping trig %trig|echo %echo|unit %unit"
+    export function ping(trig: DigitalPin, echo: DigitalPin, unit: PingUnit, maxCmDistance = 500): number {
+        // send pulse
+        pins.setPull(trig, PinPullMode.PullNone);
+        pins.digitalWritePin(trig, 0);
+        control.waitMicros(2);
+        pins.digitalWritePin(trig, 1);
+        control.waitMicros(10);
+        pins.digitalWritePin(trig, 0);
+
+        // read pulse
+        const d = pins.pulseIn(echo, PulseValue.High, maxCmDistance * 58);
+
+        switch (unit) {
+            case PingUnit.Centimeters: return Math.idiv(d, 58);
+            case PingUnit.Inches: return Math.idiv(d, 148);
+            default: return d;
+        }
+    }
+
+    // 그룹 4: DHT11 관련
+    // -----------------------------------------------------------------------------
+    export enum DHT11Type {
+        //% block="temperature(℃)" enumval=0
+        DHT11_temperature_C,
+
+        //% block="temperature(℉)" enumval=1
+        DHT11_temperature_F,
+
+        //% block="humidity(0~100)" enumval=2
+        DHT11_humidity,
+    }
+
+    let dht11Humidity = 0
+    let dht11Temperature = 0
+
+    /**
+     * get dht11 temperature and humidity Value
+     * @param dht11pin describe parameter here
+     */
+    //% group="DHT11"
+    //% color=#ff7a4b
+    //% blockId="readdht11" block="value of dht11 %dht11type| at pin %dht11pin"
+    export function dht11value(dht11type: DHT11Type, dht11pin: DigitalPin): number {
+        const DHT11_TIMEOUT = 100
+        const buffer = pins.createBuffer(40)
+        const data = [0, 0, 0, 0, 0]
+        let startTime = control.micros()
+
+        if (control.hardwareVersion().slice(0, 1) !== '1') { // V2
+            // TODO: V2 bug
+            pins.digitalReadPin(DigitalPin.P0);
+            pins.digitalReadPin(DigitalPin.P1);
+            pins.digitalReadPin(DigitalPin.P2);
+            pins.digitalReadPin(DigitalPin.P3);
+            pins.digitalReadPin(DigitalPin.P4);
+            pins.digitalReadPin(DigitalPin.P10);
+
+            // 1.start signal
+            pins.digitalWritePin(dht11pin, 0)
+            basic.pause(18)
+
+            // 2.pull up and wait 40us
+            pins.setPull(dht11pin, PinPullMode.PullUp)
+            pins.digitalReadPin(dht11pin)
+            control.waitMicros(40)
+
+            // 3.read data
+            startTime = control.micros()
+            while (pins.digitalReadPin(dht11pin) === 0) {
+                if (control.micros() - startTime > DHT11_TIMEOUT) break
+            }
+            startTime = control.micros()
+            while (pins.digitalReadPin(dht11pin) === 1) {
+                if (control.micros() - startTime > DHT11_TIMEOUT) break
+            }
+
+            for (let dataBits = 0; dataBits < 40; dataBits++) {
+                startTime = control.micros()
+                while (pins.digitalReadPin(dht11pin) === 1) {
+                    if (control.micros() - startTime > DHT11_TIMEOUT) break
+                }
+                startTime = control.micros()
+                while (pins.digitalReadPin(dht11pin) === 0) {
+                    if (control.micros() - startTime > DHT11_TIMEOUT) break
+                }
+                control.waitMicros(28)
+                if (pins.digitalReadPin(dht11pin) === 1) {
+                    buffer[dataBits] = 1
+                }
+            }
+        } else { // V1
+            // 1.start signal
+            pins.digitalWritePin(dht11pin, 0)
+            basic.pause(18)
+
+            // 2.pull up and wait 40us
+            pins.setPull(dht11pin, PinPullMode.PullUp)
+            pins.digitalReadPin(dht11pin)
+            control.waitMicros(40)
+
+            // 3.read data
+            if (pins.digitalReadPin(dht11pin) === 0) {
+                while (pins.digitalReadPin(dht11pin) === 0);
+                while (pins.digitalReadPin(dht11pin) === 1);
+
+                for (let dataBits = 0; dataBits < 40; dataBits++) {
+                    while (pins.digitalReadPin(dht11pin) === 1);
+                    while (pins.digitalReadPin(dht11pin) === 0);
+                    control.waitMicros(28)
+                    if (pins.digitalReadPin(dht11pin) === 1) {
+                        buffer[dataBits] = 1
+                    }
+                }
+            }
+        }
+
+        for (let i = 0; i < 5; i++) {
+            for (let j = 0; j < 8; j++) {
+                if (buffer[8 * i + j] === 1) {
+                    data[i] += 2 ** (7 - j)
+                }
+            }
+        }
+
+        if (((data[0] + data[1] + data[2] + data[3]) & 0xff) === data[4]) {
+            dht11Humidity = data[0] + data[1] * 0.1
+            dht11Temperature = data[2] + data[3] * 0.1
+        }
+
+        switch (dht11type) {
+            case DHT11Type.DHT11_temperature_C:
+                return dht11Temperature
+            case DHT11Type.DHT11_temperature_F:
+                return (dht11Temperature * 1.8) + 32
+            case DHT11Type.DHT11_humidity:
+                return dht11Humidity
+        }
+    }
+
+    // 그룹 5: Servo 365 관련
+    // -----------------------------------------------------------------------------
+    /**
+        * Spins the motor in one direction at full speed
+        * @param pin Which pin the motor is on
+        */
+    //% group="Servo 365"
+    //% color=#2b569b
+    //% blockId=spin_one_way weight=100
+    //% block="spin one way pin %pin"
+    export function spin_one_way(pin = AnalogPin.P1): void {
+        pins.servoWritePin(pin, 180)
+    }
+
+    /**
+    * Spins the motor in other direction at full speed
+    * @param pin Which pin the motor is on
+    */
+    //% group="Servo 365"
+    //% color=#2b569b
+    //% blockId=spin_other_way weight=80
+    //% block="spin other way pin %pin"
+    export function spin_other_way(pin = AnalogPin.P2): void {
+        pins.servoWritePin(pin, 0)
+    }
+
+    /**
+    * Spins the motor in one direction, with a speed from 0 to 100
+    * @param pin Which pin the motor is on
+    * @param speed Speed from 0 to 100
+    */
+    //% group="Servo 365"
+    //% color=#2b569b
+    //% blockId=spin_one_way_with_speed weight=60
+    //% block="spin one way pin %pin | with speed %speed"
+    //% speed.min=0 speed.max=100
+    export function spin_one_way_with_speed(pin = AnalogPin.P1, speed = 50): void {
+        let spin = (speed * 90) / 100 + 90
+        pins.servoWritePin(pin, spin)
+    }
+
+    /**
+    * Spins the motor in the other direction, with a speed from 0 to 100
+    * @param pin Which pin the motor is on
+    * @param speed Speed from 0 to 100
+    */
+    //% group="Servo 365"
+    //% color=#2b569b
+    //% blockId=spin_other_way_with_speed weight=40
+    //% block="spin other way pin %pin | with speed %speed"
+    //% speed.min=0 speed.max=100
+    export function spin_other_way_with_speed(pin = AnalogPin.P2, speed = 50): void {
+        let spin = 90 - (speed * 90) / 100
+        pins.servoWritePin(pin, spin)
+    }
+
+    /**
+    * Turns off the motor at this pin
+    * @param pin Which pin the motor is on
+    */
+    //% group="Servo 365"
+    //% color=#2b569b
+    //% blockId=turn_off_motor weight=20
+    //% block="turn off motor at pin %pin"
+    export function turn_off_motor(pin = DigitalPin.P1): void {
+        pins.digitalWritePin(pin, 0)
     }
 }
